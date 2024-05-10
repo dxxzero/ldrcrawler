@@ -21,24 +21,24 @@ fn __readgsqword(offset: u32) -> u64 {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub fn get_module_handle(lib_name: &str) -> u64 {
+pub fn get_module_handle(lib_name: &str) -> usize {
     unsafe {
         let peb = __readgsqword(0x60) as *const Peb;
         let header = (*(*peb).ldr).in_memory_order_module_list;
 
         let mut curr = header.flink;
-        curr = (*(curr as *mut ListEntry)).flink;
+        curr = (*curr).flink;
         while curr != header.flink {
-            let data = (curr - 16) as *const LdrDataTableEntry; //-16 is used instead of the CONTAINING_RECORD macro. Prolly needs to be adjusted for x86
+            let data = (curr as usize - 16) as *const LdrDataTableEntry; //-16 is used instead of the CONTAINING_RECORD macro. Prolly needs to be adjusted for x86
             let dll_name_slice = std::slice::from_raw_parts(
                 (*data).base_dll_name.buffer,
                 ((*data).base_dll_name.length / 2) as usize, // /2 because of unicode
             );
             let dll_name = String::from_utf16_lossy(dll_name_slice).to_lowercase();
             if dll_name == lib_name {
-                return (*data).dll_base;
+                return (*data).dll_base as usize;
             }
-            curr = (*(curr as *mut ListEntry)).flink;
+            curr = (*curr).flink;
         }
     }
 
@@ -46,42 +46,42 @@ pub fn get_module_handle(lib_name: &str) -> u64 {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub fn get_func_address(module_base: u64, func_name: &str) -> u64 {
+pub fn get_func_address(module_base: usize, func_name: &str) -> usize {
     let dos_header = module_base as *const IMAGE_DOS_HEADER;
     let nt_headers =
-        unsafe { (module_base + (*dos_header).e_lfanew as u64) as *const IMAGE_NT_HEADERS64 };
+        unsafe { (module_base + (*dos_header).e_lfanew as usize) as *const IMAGE_NT_HEADERS64 };
     let optional_headers = (unsafe { *nt_headers }).OptionalHeader;
     let export_table_data = optional_headers.DataDirectory[0];
 
     let export_table =
-        (module_base + export_table_data.VirtualAddress as u64) as *const IMAGE_EXPORT_DIRECTORY;
+        (module_base + export_table_data.VirtualAddress as usize) as *const IMAGE_EXPORT_DIRECTORY;
     let array_of_functions =
-        (module_base + (unsafe { *export_table }).AddressOfFunctions as u64) as u64;
-    let array_of_names = (module_base + (unsafe { *export_table }).AddressOfNames as u64) as u64;
+        module_base + (unsafe { *export_table }).AddressOfFunctions as usize;
+    let array_of_names = module_base + (unsafe { *export_table }).AddressOfNames as usize;
     let array_of_names_ordinals =
-        (module_base + (unsafe { *export_table }).AddressOfNameOrdinals as u64) as u64;
+        module_base + (unsafe { *export_table }).AddressOfNameOrdinals as usize;
 
     unsafe {
         for i in 0..(*export_table).NumberOfFunctions {
             let fn_name_address =
-                module_base + *((array_of_names as usize + (i * 4) as usize) as *const u32) as u64;
+                module_base + *((array_of_names + (i * 4) as usize) as *const u32) as usize;  // * 4 because of size of a DWORD
             let fn_name =
                 if let Ok(cstr) = CStr::from_ptr(fn_name_address as *const c_char).to_str() {
                     cstr.to_string()
                 } else {
-                    String::default()
+                    continue;
                 };
             if fn_name == func_name {
                 let num_curr_api_ordinal =
-                    *((array_of_names_ordinals as usize + (i * 2) as usize) as *const u16) as u64;
+                    *((array_of_names_ordinals + (i * 2) as usize) as *const u16) as usize;  // * 2 because size of a WORD
                 println!(
                     "[+] Found ordinal {:4x} - {}",
                     num_curr_api_ordinal + 1,
                     fn_name
                 );
                 return module_base
-                    + *((array_of_functions as usize + ((num_curr_api_ordinal) * 4) as usize)
-                        as *const u32) as u64;
+                    + *((array_of_functions + ((num_curr_api_ordinal) * 4)) // * 4 because of size of a DWORD
+                        as *const u32) as usize;
             }
         }
     }
@@ -89,7 +89,7 @@ pub fn get_func_address(module_base: u64, func_name: &str) -> u64 {
 }
 
 #[repr(C)]
-struct UnicodeString32 {
+struct UnicodeString {
     length: u16,
     maximum_length: u16,
     buffer: *const u16,
@@ -98,13 +98,13 @@ struct UnicodeString32 {
 #[repr(C)]
 union HashLinksOrSectionPointer {
     hash_links: ListEntry,
-    section_pointer: u64,
+    section_pointer: *mut c_void,
 }
 
 #[repr(C)]
 union TimeDateStampOrLoadedImports {
     time_date_stamp: u64,
-    loaded_imports: u64,
+    loaded_imports: *mut c_void,
 }
 
 #[repr(C)]
@@ -112,26 +112,26 @@ struct LdrDataTableEntry {
     in_load_order_links: ListEntry,
     in_memory_order_links: ListEntry,
     in_initialization_order_links: ListEntry,
-    dll_base: u64,
-    entry_point: u64,
+    dll_base: *mut c_void,
+    entry_point: *mut c_void,
     size_of_image: u64,
-    full_dll_name: UnicodeString32,
-    base_dll_name: UnicodeString32,
+    full_dll_name: UnicodeString,
+    base_dll_name: UnicodeString,
     flags: u64,
     load_count: u16,
     tls_index: u16,
     hash_links_or_section_pointer: HashLinksOrSectionPointer, // Union
     checksum: u64,
     time_date_stamp_or_loaded_imports: TimeDateStampOrLoadedImports, // Union
-    entry_point_activation_context: u64,
-    patch_information: u64,
+    entry_point_activation_context: *mut c_void,
+    patch_information: *mut c_void,
 }
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 struct ListEntry {
-    flink: u64,
-    blink: u64,
+    flink: *mut ListEntry,
+    blink: *mut ListEntry,
 }
 
 #[repr(C)]
@@ -152,18 +152,18 @@ struct Peb {
     read_image_file_exec_options: u8,
     being_debugged: u8,
     bit_field: u8,
-    mutant: u64,
-    image_base_address: u64,
+    mutant: *mut c_void,
+    image_base_address: *mut c_void,
     ldr: *mut PebLdrData,
-    process_parameters: u64,
-    sub_system_data: u64,
-    process_heap: u64,
-    fast_peb_lock: u64,
-    atl_thunk_slist_ptr: u64,
-    ifeo_key: u64,
+    process_parameters: usize,
+    sub_system_data: *mut c_void,
+    process_heap: *mut c_void,
+    fast_peb_lock: *mut c_void,
+    atl_thunk_slist_ptr: *mut c_void,
+    ifeo_key: *mut c_void,
     cross_process_flags: u64,
-    user_shared_info_ptr: u64,
+    user_shared_info_ptr: *mut c_void,
     system_reserved: u64,
     atl_thunk_slist_ptr32: u64,
-    api_set_map: u64,
+    api_set_map: *mut c_void,
 }
