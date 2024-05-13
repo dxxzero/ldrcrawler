@@ -1,7 +1,6 @@
 use std::arch::asm;
 use std::ffi::c_void;
 use std::ffi::CStr;
-use std::mem::size_of;
 use std::os::raw::c_char;
 #[cfg(target_arch = "x86")]
 use windows::Win32::System::Diagnostics::Debug::IMAGE_NT_HEADERS32;
@@ -52,7 +51,7 @@ pub fn get_module_handle(lib_name: &str) -> usize {
 
         let mut curr = header.flink;
         curr = (*curr).flink;
-        println!("{:?}", size_of::<LdrDataTableEntry>());
+
         while curr != header.flink {
             let data = (curr as usize - offset) as *const LdrDataTableEntry;
             let dll_name_slice = std::slice::from_raw_parts(
