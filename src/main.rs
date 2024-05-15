@@ -1,4 +1,4 @@
-use ldrcrawler::{get_func_address, get_module_handle, WinExecFunc};
+use ldrcrawler::{get_func_address, get_module_handle, hide_module, WinExecFunc};
 use std::mem::transmute;
 
 fn main() {
@@ -10,4 +10,6 @@ fn main() {
     let ptr_winexec: WinExecFunc = unsafe { transmute(get_func_address(kernel32_base, "WinExec")) };
     println!("[+] get_func_address({}) = {:?}", "WinExec", ptr_winexec);
     let _ = ptr_winexec("calc\0".as_ptr() as *const u8, 5);
+    hide_module("apphelp.dll");
+    println!("a");
 }

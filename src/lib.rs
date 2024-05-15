@@ -35,6 +35,11 @@ fn __readfsword(offset: u32) -> u32 {
     out
 }
 
+#[cfg(target_arch = "x86_64")]
+const ENTRY_OFFSET: usize = 16; //-16 is used instead of the CONTAINING_RECORD macro.
+#[cfg(target_arch = "x86")]
+const ENTRY_OFFSET: usize = 8; //-8 is used instead of the CONTAINING_RECORD macro.
+
 pub fn get_module_handle(lib_name: &str) -> usize {
     unsafe {
         #[cfg(target_arch = "x86_64")]
@@ -44,23 +49,17 @@ pub fn get_module_handle(lib_name: &str) -> usize {
 
         let header = (*(*peb).ldr).in_memory_order_module_list;
 
-        #[cfg(target_arch = "x86_64")]
-        let offset = 16; //-16 is used instead of the CONTAINING_RECORD macro.
-        #[cfg(target_arch = "x86")]
-        let offset = 8; //-8 is used instead of the CONTAINING_RECORD macro.
-
         let mut curr = header.flink;
         curr = (*curr).flink;
 
         while curr != header.flink {
-            let data = (curr as usize - offset) as *const LdrDataTableEntry;
+            let data = (curr as usize - ENTRY_OFFSET) as *const LdrDataTableEntry;
             let dll_name_slice = std::slice::from_raw_parts(
                 (*data).base_dll_name.buffer,
                 ((*data).base_dll_name.length / 2) as usize, // /2 because of unicode
             );
             let dll_name = String::from_utf16_lossy(dll_name_slice).to_lowercase();
             if dll_name == lib_name {
-                // contains is needed for x86, since in x86 the full path is in the dll_name
                 return (*data).dll_base as usize;
             }
             curr = (*curr).flink;
@@ -68,6 +67,61 @@ pub fn get_module_handle(lib_name: &str) -> usize {
     }
 
     0
+}
+
+pub fn hide_module(lib_name: &str) {
+    unsafe {
+        #[cfg(target_arch = "x86_64")]
+        let peb = __readgsqword(0x60) as *const Peb;
+        #[cfg(target_arch = "x86")]
+        let peb = __readfsword(0x30) as *const Peb;
+
+        let header = (*(*peb).ldr).in_memory_order_module_list;
+
+        let mut curr = header.flink;
+        curr = (*curr).flink;
+
+        while curr != header.flink {
+            let in_mem_list  = (curr as usize - ENTRY_OFFSET) as *const LdrDataTableEntry;
+            let dll_name_slice = std::slice::from_raw_parts(
+                (*in_mem_list).base_dll_name.buffer,
+                ((*in_mem_list).base_dll_name.length / 2) as usize, // /2 because of unicode
+            );
+            let dll_name = String::from_utf16_lossy(dll_name_slice).to_lowercase();
+            if dll_name == lib_name {
+                let mut prev = (*in_mem_list).in_memory_order_links.blink;
+                let mut next = (*in_mem_list).in_memory_order_links.flink;
+                if !prev.is_null() {
+                    (*prev).flink = next;
+                }
+                if !next.is_null() {
+                    (*next).blink = prev;
+                }
+
+                prev = (*in_mem_list).in_load_order_links.blink;
+                next = (*in_mem_list).in_load_order_links.flink;
+                if !prev.is_null() {
+                    (*prev).flink = next;
+                }
+                if !next.is_null() {
+                    (*next).blink = prev;
+                }
+
+                prev = (*in_mem_list).in_initialization_order_links.blink;
+                next = (*in_mem_list).in_initialization_order_links.flink;
+                if !prev.is_null() {
+                    (*prev).flink = next;
+                }
+                if !next.is_null() {
+                    (*next).blink = prev;
+                }
+
+                break;
+            }
+            curr = (*curr).flink;
+        }
+    }
+
 }
 
 pub fn get_func_address(module_base: usize, func_name: &str) -> usize {

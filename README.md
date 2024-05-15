@@ -1,6 +1,5 @@
 # ldrcrawler
-This example code performs the PE crawling technique to find the address of WinExec.
-It will be further improved to also hide modules.
+This example code performs the PE crawling technique to find the address of WinExec and hides a module from memory.
 
 # Build 
 ```
